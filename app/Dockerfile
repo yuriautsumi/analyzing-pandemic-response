@@ -20,5 +20,6 @@ COPY app/init.sh /usr/local/bin/
 RUN chmod u+x /usr/local/bin/init.sh
 EXPOSE 8000 2222
 #CMD ["python", "/code/manage.py", "runserver", "0.0.0.0:8000"]
-ENTRYPOINT ["/usr/local/bin/init.sh"]
-
+#ENTRYPOINT ["/usr/local/bin/init.sh"]
+RUN service ssh start
+CMD ["python", "/code/app/app.py"]
