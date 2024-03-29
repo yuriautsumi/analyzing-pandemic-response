@@ -14,7 +14,7 @@ RUN apt-get update \
 	&& apt-get install -y --no-install-recommends openssh-server \
 	&& echo "$SSH_PASSWD" | chpasswd 
 
-COPY sshd_config /etc/ssh/
+COPY app/sshd_config /etc/ssh/
 COPY app/init.sh /usr/local/bin/
 	
 RUN chmod u+x /usr/local/bin/init.sh
