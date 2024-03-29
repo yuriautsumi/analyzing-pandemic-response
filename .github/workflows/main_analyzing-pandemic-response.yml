@@ -22,15 +22,15 @@ jobs:
     - name: Log in to registry
       uses: docker/login-action@v2
       with:
-        registry: https://index.docker.io/v1/
-        username: ${{ secrets.AzureAppService_ContainerUsername_c93106e0e7b24ee29ef401779bc6fa54 }}
-        password: ${{ secrets.AzureAppService_ContainerPassword_4b8fbab8eb814ef8a16301846a27bbc3 }}
+        registry: https://analyzingpandemicresponse.azurecr.io/
+        username: ${{ secrets.AzureAppService_ContainerUsername_ca0747b58da94e6988023f2c9e38b994 }}
+        password: ${{ secrets.AzureAppService_ContainerPassword_3f823589ecd644f7b4161f51ee277d98 }}
 
     - name: Build and push container image to registry
       uses: docker/build-push-action@v3
       with:
         push: true
-        tags: index.docker.io/${{ secrets.AzureAppService_ContainerUsername_c93106e0e7b24ee29ef401779bc6fa54 }}/sakuralily11/arp-dash:${{ github.sha }}
+        tags: analyzingpandemicresponse.azurecr.io/${{ secrets.AzureAppService_ContainerUsername_ca0747b58da94e6988023f2c9e38b994 }}/arp-dash:${{ github.sha }}
         file: ./Dockerfile
 
   deploy:
@@ -47,5 +47,5 @@ jobs:
       with:
         app-name: 'analyzing-pandemic-response'
         slot-name: 'production'
-        publish-profile: ${{ secrets.AzureAppService_PublishProfile_4ae68fdb59f24c5a8632ce0fcc215092 }}
-        images: 'index.docker.io/${{ secrets.AzureAppService_ContainerUsername_c93106e0e7b24ee29ef401779bc6fa54 }}/sakuralily11/arp-dash:${{ github.sha }}'
+        publish-profile: ${{ secrets.AzureAppService_PublishProfile_723cd66ca1914e58b55c24b9afdb43d9 }}
+        images: 'analyzingpandemicresponse.azurecr.io/${{ secrets.AzureAppService_ContainerUsername_ca0747b58da94e6988023f2c9e38b994 }}/arp-dash:${{ github.sha }}'
