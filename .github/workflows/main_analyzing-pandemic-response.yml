@@ -31,7 +31,7 @@ jobs:
       with:
         push: true
         tags: analyzingpandemicresponse.azurecr.io/${{ secrets.AzureAppService_ContainerUsername_ca0747b58da94e6988023f2c9e38b994 }}/arp-dash:${{ github.sha }}
-        file: ./Dockerfile
+        file: ./app/Dockerfile
 
   deploy:
     runs-on: ubuntu-latest
