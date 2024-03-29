@@ -2,9 +2,9 @@ FROM tiangolo/uwsgi-nginx-flask:python3.9
 
 RUN mkdir /code
 WORKDIR /code
-ADD requirements.txt /code/
-RUN pip install -r requirements.txt --no-cache-dir
-ADD . /code/
+ADD app/requirements.txt /code/
+RUN pip install -r app/requirements.txt --no-cache-dir
+ADD app/ /code/
 
 # ssh
 ENV SSH_PASSWD "root:Docker!"
@@ -15,10 +15,10 @@ RUN apt-get update \
 	&& echo "$SSH_PASSWD" | chpasswd 
 
 COPY sshd_config /etc/ssh/
-COPY init.sh /usr/local/bin/
+COPY app/init.sh /usr/local/bin/
 	
 RUN chmod u+x /usr/local/bin/init.sh
 EXPOSE 8000 2222
 #CMD ["python", "/code/manage.py", "runserver", "0.0.0.0:8000"]
-ENTRYPOINT ["init.sh"]
+ENTRYPOINT ["app/init.sh"]
 
