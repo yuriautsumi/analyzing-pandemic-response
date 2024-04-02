@@ -1,7 +1,8 @@
 # Docs for the Azure Web Apps Deploy action: https://github.com/Azure/webapps-deploy
 # More GitHub Actions for Azure: https://github.com/Azure/actions
+# More info on Python, GitHub Actions, and Azure App Service: https://aka.ms/python-webapps-actions
 
-name: Build and deploy container app to Azure Web App - analyzing-pandemic-response
+name: Build and deploy Python app to Azure Web App - analyzing-pandemic-response
 
 on:
   push:
@@ -11,41 +12,67 @@ on:
 
 jobs:
   build:
-    runs-on: 'ubuntu-latest'
+    runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
 
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v2
+      - name: Set up Python version
+        uses: actions/setup-python@v1
+        with:
+          python-version: '3.9'
 
-    - name: Log in to registry
-      uses: docker/login-action@v2
-      with:
-        registry: https://analyzingpandemicresponse.azurecr.io/
-        username: ${{ secrets.AzureAppService_ContainerUsername_ca0747b58da94e6988023f2c9e38b994 }}
-        password: ${{ secrets.AzureAppService_ContainerPassword_3f823589ecd644f7b4161f51ee277d98 }}
+      - name: Create and start virtual environment
+        run: |
+          python -m venv venv
+          source venv/bin/activate
+      
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+        
+      # Optional: Add step to run tests here (PyTest, Django test suites, etc.)
 
-    - name: Build and push container image to registry
-      uses: docker/build-push-action@v3
-      with:
-        push: true
-        tags: analyzingpandemicresponse.azurecr.io/${{ secrets.AzureAppService_ContainerUsername_ca0747b58da94e6988023f2c9e38b994 }}/arp-dash:${{ github.sha }}
-        file: ./app/Dockerfile
+      - name: Zip artifact for deployment
+        run: zip release.zip ./* -r
+
+      - name: Upload artifact for deployment jobs
+        uses: actions/upload-artifact@v3
+        with:
+          name: python-app
+          path: |
+            release.zip
+            !venv/
 
   deploy:
     runs-on: ubuntu-latest
     needs: build
     environment:
-      name: 'production'
+      name: 'Production'
       url: ${{ steps.deploy-to-webapp.outputs.webapp-url }}
+    permissions:
+      id-token: write #This is required for requesting the JWT
 
     steps:
-    - name: Deploy to Azure Web App
-      id: deploy-to-webapp
-      uses: azure/webapps-deploy@v2
-      with:
-        app-name: 'analyzing-pandemic-response'
-        slot-name: 'production'
-        publish-profile: ${{ secrets.AzureAppService_PublishProfile_723cd66ca1914e58b55c24b9afdb43d9 }}
-        images: 'analyzingpandemicresponse.azurecr.io/${{ secrets.AzureAppService_ContainerUsername_ca0747b58da94e6988023f2c9e38b994 }}/arp-dash:${{ github.sha }}'
+      - name: Download artifact from build job
+        uses: actions/download-artifact@v3
+        with:
+          name: python-app
+
+      - name: Unzip artifact for deployment
+        run: unzip release.zip
+
+      
+      - name: Login to Azure
+        uses: azure/login@v1
+        with:
+          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_A67811372E594D488EE998B5398A9BB4 }}
+          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_A9345317D4F3451DB008762E71654F2E }}
+          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_32DD2F29C0754C3E80EC3FBBA4D5B166 }}
+
+      - name: 'Deploy to Azure Web App'
+        uses: azure/webapps-deploy@v2
+        id: deploy-to-webapp
+        with:
+          app-name: 'analyzing-pandemic-response'
+          slot-name: 'Production'
+          
