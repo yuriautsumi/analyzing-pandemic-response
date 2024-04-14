@@ -4,6 +4,8 @@ import os
 import glob
 
 import re
+import copy
+import math
 import pickle
 import requests
 import numpy as np
@@ -14,6 +16,9 @@ import matplotlib.pyplot as plt
 import epyestim
 import epyestim.covid19 as covid19
 
+import utils
+import config 
+import tsa_helper
 import constants as C
 
 from tqdm import tqdm
@@ -531,6 +536,53 @@ def load_misc_data():
 
     return misc_df
 
+def filter_data(data_to_df):
+    for data_key, df in data_to_df.items():
+        if type(df) == pd.DataFrame:
+            # Remove any column containing value in config.columns_to_remove
+            filtered_columns = list(filter(lambda col: all([c not in col for c in config.columns_to_remove]), df.columns))
+            data_to_df[data_key] = df[filtered_columns]
+        else:
+            for k,v in df.items():
+                if type(v) != pd.DataFrame: continue
+                filtered_columns = list(filter(lambda col: all([c not in col for c in config.columns_to_remove]), v.columns))
+                data_to_df[data_key][k] = v[filtered_columns]
+    return data_to_df
+
+"""
+    for key, key_columns_to_remove in config.columns_to_remove.items():
+        data = data_to_df[key]
+        if type(data) == dict:
+            data_list = [data['national_df'], data['subnational_df']]
+        else:
+            data_list = [data]
+
+        for i, data_i in enumerate(data_list):
+            try:
+                data_i.drop(columns=key_columns_to_remove, inplace=True)
+            except KeyError:
+                print('Did not remove all columns. Please check the column names.')
+            data_list[i] = data_i
+        
+        if len(data_list)==1: data_to_df[key] = data_list[0]
+        else: data_to_df[key]['national_df'], data_to_df[key]['subnational_df'] = data_list
+    return data_to_df
+"""
+"""
+    for k,v in data_to_column_map.items():
+        for k2,v2 in v.items():
+            v2_dict = None
+            if len(v2)==0: continue
+            elif type(v2) == dict: continue
+            if len(v2)>1: 
+                if type(v2[1]) == dict:
+                    v2,v2_dict = v2
+            v2_filtered = list(filter(lambda col: all([c not in col for c in config.columns_to_remove]), v2))
+            if v2_dict is None: data_to_column_map[k][k2] = v2_filtered
+            else: data_to_column_map[k][k2] = (v2_filtered, v2_dict)
+    return data_to_column_map
+"""
+
 def merge_data(data_to_df):
     # Combine dataframes: OxCGRT, US Census, Mobility, Hospital
     mobility_data_dict = data_to_df['mobility_data_dict']
@@ -837,14 +889,63 @@ def encode_non_numerical_columns(df):
 
     return df, label_encoders
 
-# Process policy columns 
-def process_policy(df, data_to_column_map, policy_ids):
+
+def load_all_data():
+    mobility_data_dict = load_mobility_data()
+    hospital_coverage_df, hospital_admission_df = load_hospital_data('coverage')
+    X_demographic_subnational, X_demographic_national = load_demographic_data()
+    load_OxCGRT_data = get_OxCGRT_data_loader()
+    national_OxCGRT_df, subnational_OxCGRT_df, subnational_OxCGRT_by_region = load_OxCGRT_data(C.COUNTRY_CODE)
+    misc_df = load_misc_data()
+
+    # Filter columns, Merge data 
+    data_to_df = {
+        'mobility_data_dict': mobility_data_dict,
+        'hospital_coverage_df': hospital_coverage_df,
+        'hospital_admission_df': hospital_admission_df,
+        'X_demographic_subnational': X_demographic_subnational,
+        'X_demographic_national': X_demographic_national,
+        'national_OxCGRT_df': national_OxCGRT_df,
+        'subnational_OxCGRT_df': subnational_OxCGRT_df,
+        'misc_df': misc_df,
+    }
+    data_to_df_unfiltered = copy.deepcopy(data_to_df)
+    data_to_df = filter_data(data_to_df)
+    subnational_df_unfiltered, national_df_unfiltered = merge_data(data_to_df_unfiltered)
+    subnational_df, national_df = merge_data(data_to_df)
+
+    # Get columns
+    ## Columns of interest:
+    # OxCGRT: policy (OxCGRT_policy_columns), policy_support_target_flags, vax_status_columns, policy_index_columns
+    # Hospital: per_100_000_columns
+    # Mobility: mobility
+    # Demographic: all 
+    # Misc: weighted_population_density
+    data_to_columns_unfiltered, data_to_column_map_unfiltered, OxCGRT_policy_columns_unfiltered = get_columns(subnational_df_unfiltered)
+    data_to_columns, data_to_column_map, OxCGRT_policy_columns = get_columns(subnational_df)
+
+    # Update dtypes
+    subnational_df = subnational_df.astype(subnational_df.infer_objects().dtypes)
+    national_df = national_df.astype(national_df.infer_objects().dtypes)
+
+    # Filter columns according to config file
+    # Note: updating this column map will ensure we select from this subset.
+    data_to_column_map = utils.filter_data_to_column_map(data_to_column_map)
+
+    return ((subnational_df, national_df, data_to_df,
+             data_to_columns, data_to_column_map, OxCGRT_policy_columns),
+            (subnational_df_unfiltered, national_df_unfiltered, data_to_df_unfiltered,
+             data_to_columns_unfiltered, data_to_column_map_unfiltered, OxCGRT_policy_columns_unfiltered))
+
+
+
+def encode_policy(df, data_to_column_map, policy_ids, update_df=False):
     # 1) Indicators for when change occurs, 2) indicators for policies in place (confounders)
     all_policy_dfs, all_policy_intervention_columns_map = [], {}
     for policy_id in policy_ids:
         print(f'----- Policy {policy_id} -----')
         policy_columns = data_to_column_map['OxCGRT'][f'policy_{policy_id}_columns'][0]
-        policy_df = df[policy_columns]
+        policy_df = df[policy_columns].copy()
         
         # Encode columns (if needed)
         dtype_tuple = [(x,y) for x,y in df[policy_columns].dtypes.items()]
@@ -864,7 +965,7 @@ def process_policy(df, data_to_column_map, policy_ids):
                 encoded_temp = enc.fit_transform(df[[col]]).astype('Int64')
                 # encoded_temp = pd.DataFrame(enc.fit_transform(subnational_df[columns_to_encode]))
             
-            policy_df.loc[:, [col]] = encoded_temp
+            policy_df.loc[:, col] = encoded_temp
 
         dtypes = policy_df.dtypes
         dtypes.loc[policy_df.max() > 10] = 'Float64' # Set continuous vars as float64
@@ -879,8 +980,57 @@ def process_policy(df, data_to_column_map, policy_ids):
         policy_columns = list(filter(lambda x: x not in to_remove, policy_columns))
         policy_df = policy_df[policy_columns]
 
+        if update_df: df[policy_columns] = policy_df # update df
         all_policy_dfs.append(policy_df)
         all_policy_intervention_columns_map[f'policy_{policy_id}_columns_intervention'] = [f'{x}_intervention' for x in policy_columns]
+    
+    return all_policy_dfs, all_policy_intervention_columns_map, df
+
+# Process policy columns 
+def process_policy(df, data_to_column_map, policy_ids):
+    # 1) Indicators for when change occurs, 2) indicators for policies in place (confounders)
+    # all_policy_dfs, all_policy_intervention_columns_map = [], {}
+    # for policy_id in policy_ids:
+    #     print(f'----- Policy {policy_id} -----')
+    #     policy_columns = data_to_column_map['OxCGRT'][f'policy_{policy_id}_columns'][0]
+    #     policy_df = df[policy_columns]
+        
+    #     # Encode columns (if needed)
+    #     dtype_tuple = [(x,y) for x,y in df[policy_columns].dtypes.items()]
+    #     columns_to_encode = list(filter(lambda x:x[1]=='object', dtype_tuple))
+    #     columns_to_encode = [x[0] for x in columns_to_encode]
+    #     int_columns = []
+    #     for col in columns_to_encode:
+    #         categories = policy_df[[col]].iloc[:, 0].value_counts().index
+    #         p = re.compile('yrs')
+    #         if all([p.search(x) is not None for x in categories]): # if working with "age" categories, order encoding from highest lower bound to lowest lower bound
+    #             categories = [np.nan] + sorted(categories, reverse=True)
+    #             categories_map = dict(zip(categories, range(len(categories))))
+    #             encoded_temp = df[col].apply(lambda x: categories_map[x]).values[:, None].astype('int64')
+    #             int_columns.append(col)
+    #         else:
+    #             enc = OrdinalEncoder()
+    #             encoded_temp = enc.fit_transform(df[[col]]).astype('Int64')
+    #             # encoded_temp = pd.DataFrame(enc.fit_transform(subnational_df[columns_to_encode]))
+            
+    #         policy_df.loc[:, [col]] = encoded_temp
+
+    #     dtypes = policy_df.dtypes
+    #     dtypes.loc[policy_df.max() > 10] = 'Float64' # Set continuous vars as float64
+    #     dtypes.loc[int_columns] = 'Int64'
+    #     policy_df = policy_df.astype(dtypes)
+
+    #     # Remove columns that provide no information
+    #     to_remove = set()
+    #     for col in policy_columns:
+    #         n_unique = len(policy_df[col].dropna().unique())
+    #         if n_unique <= 1: to_remove.add(col)
+    #     policy_columns = list(filter(lambda x: x not in to_remove, policy_columns))
+    #     policy_df = policy_df[policy_columns]
+
+    #     all_policy_dfs.append(policy_df)
+    #     all_policy_intervention_columns_map[f'policy_{policy_id}_columns_intervention'] = [f'{x}_intervention' for x in policy_columns]
+    all_policy_dfs, all_policy_intervention_columns_map, _ = encode_policy(df, data_to_column_map, policy_ids, update_df=False)
 
     all_policy_df = pd.concat(all_policy_dfs, axis=1)
     all_policy_intervention_df = all_policy_df.diff(1).fillna(0).add_suffix('_intervention').astype('Int64') # intervention indicators 
@@ -922,7 +1072,7 @@ def process_wave(df, date_column):
         'Wave_3': _get_wave_fn('2020-09-15', '2021-03-15'),
         'Wave_4': _get_wave_fn('2021-03-15', '2021-07-01'),
         'Wave_5': _get_wave_fn('2021-07-01', '2022-01-01'),
-        'Wave_6': _get_wave_fn('2022-01-01', '2022-05-01'),
+        'Wave_6': _get_wave_fn('2022-01-01', '2022-02-15'),
         # 'Wave_6': _get_wave_fn('2022-01-01', '2022-03-15'),
     }
 
@@ -971,6 +1121,190 @@ def process_r0_outcomes(df, case_rate_column, groupby_column, date_column, popul
         how='left'
     )
 
+
+
+
+def post_process_data(subnational_df, national_df, data_to_column_map, OxCGRT_policy_columns):
+    outcome_columns = data_to_column_map['OxCGRT']['outcome_columns']
+    population_column = data_to_column_map['demographic']['count_columns'][0]
+    date_column = data_to_column_map['OxCGRT']['date'][0]
+    groupby_column = data_to_column_map['OxCGRT']['location'][-1]
+    policy_index_columns = data_to_column_map['OxCGRT']['policy_index_columns']
+    policy_raw_columns = list(filter(lambda x: 'Flag' not in x, OxCGRT_policy_columns))
+    policy_ids = ['C', 'H', 'E', 'V']
+    # policy_raw_columns = np.concatenate([data_to_column_map['OxCGRT'][f'policy_{pid}_columns'][0] for pid in policy_ids]).tolist()
+
+    # 1. Apply differencing to outcomes
+    # Apply differencing, adjust outcomes (Y) by population 
+    print(f'Apply differencing, adjust outcomes by population')
+    d = 7
+    _, diff_outcome_columns = \
+        tsa_helper.difference_outcomes(subnational_df, outcome_columns, d, groupby_col=groupby_column, scale_col=population_column, pct_change=False, add_to_df=True)
+    _, _ = \
+        tsa_helper.difference_outcomes(national_df, outcome_columns, d, groupby_col=groupby_column, scale_col=population_column, pct_change=False, add_to_df=True)
+    _, diff2_outcome_columns = \
+        tsa_helper.difference_outcomes(subnational_df, diff_outcome_columns, d, groupby_col=groupby_column, scale_col=None, pct_change=False, add_to_df=True) 
+    _, _ = \
+        tsa_helper.difference_outcomes(national_df, diff_outcome_columns, d, groupby_col=groupby_column, scale_col=None, pct_change=False, add_to_df=True) 
+    data_to_column_map['OxCGRT'] = data_to_column_map['OxCGRT'] | {'outcome_columns_diff': diff_outcome_columns, 'outcome_columns_diff2': diff2_outcome_columns}
+
+
+    # 2. Extract interventions from policy columns
+    # a. Individual Containment/Health/Economic/Vax policies  (discrete)
+    # subnational_df, all_policy_intervention_columns_map = \
+    #     data_helper.process_policy(subnational_df, data_to_column_map, policy_ids)
+    # national_df, _ = \
+    #     data_helper.process_policy(national_df, data_to_column_map, policy_ids)
+    # data_to_column_map['OxCGRT'] = data_to_column_map['OxCGRT'] | all_policy_intervention_columns_map
+    # Encode columns first
+    _, _, subnational_df = encode_policy(subnational_df, data_to_column_map, policy_ids, update_df=True)
+    _, _, national_df = encode_policy(national_df, data_to_column_map, policy_ids, update_df=True)
+
+    d = 7
+    # outcome_dtypes = [subnational_df.dtypes.loc[col] for col in policy_raw_columns] 
+    _, diff_policy_raw_columns = \
+        tsa_helper.difference_outcomes(subnational_df, policy_raw_columns, d, groupby_col=groupby_column, scale_col=None, pct_change=False, add_to_df=True)
+    _, _ = \
+        tsa_helper.difference_outcomes(national_df, policy_raw_columns, d, groupby_col=groupby_column, scale_col=None, pct_change=False, add_to_df=True)
+
+    # preserve dtype (Int64)
+    subnational_df = _set_column_astype(subnational_df, dict(zip(diff_policy_raw_columns, ['Int64']*len(policy_raw_columns))))
+    national_df = _set_column_astype(national_df, dict(zip(diff_policy_raw_columns, ['Int64']*len(policy_raw_columns))))
+
+    # rename by adding "_intervention" suffix
+    policy_raw_to_intervention_name_map = dict(zip(diff_policy_raw_columns, [f'{col}_intervention' for col in diff_policy_raw_columns]))
+    subnational_df.rename(columns=policy_raw_to_intervention_name_map, inplace=True)
+    national_df.rename(columns=policy_raw_to_intervention_name_map, inplace=True)
+
+    data_to_column_map['OxCGRT'] = data_to_column_map['OxCGRT'] | {'policy_raw_columns_intervention': policy_raw_to_intervention_name_map}
+
+    # b. Policy Indices (stringency, response, containment+health, economic)
+    d = 7
+    _, diff_policy_index_columns = \
+        tsa_helper.difference_outcomes(subnational_df, policy_index_columns, d, groupby_col=groupby_column, scale_col=None, pct_change=False, add_to_df=True)
+    _, _ = \
+        tsa_helper.difference_outcomes(national_df, policy_index_columns, d, groupby_col=groupby_column, scale_col=None, pct_change=False, add_to_df=True)
+
+    # rename by adding "_intervention" suffix
+    policy_index_to_intervention_name_map = dict(zip(diff_policy_index_columns, [f'{col}_intervention' for col in diff_policy_index_columns]))
+    subnational_df.rename(columns=policy_index_to_intervention_name_map, inplace=True)
+    national_df.rename(columns=policy_index_to_intervention_name_map, inplace=True)
+
+    data_to_column_map['OxCGRT'] = data_to_column_map['OxCGRT'] | {'policy_index_columns_intervention': policy_index_to_intervention_name_map}
+
+
+    # 3. Add wave information and select data within identified waves
+    subnational_df, wave_columns = process_wave(subnational_df, date_column)
+    national_df, _ = process_wave(national_df, date_column)
+    data_to_column_map['Wave'] = {'wave': wave_columns}
+    """
+    # 4. Compute R0 outcomes
+    case_rate_column = data_to_column_map['OxCGRT']['outcome_columns_diff'][0]
+    r0_outcome_columns = ['R0_R_mean', 'R0_R_var']
+
+    subnational_df = data_helper.process_r0_outcomes(subnational_df, case_rate_column, groupby_column, date_column, population_column)
+    national_df = data_helper.process_r0_outcomes(national_df, case_rate_column, groupby_column, date_column, population_column)
+    """
+    case_rate_column = data_to_column_map['OxCGRT']['outcome_columns_diff'][0]
+    r0_outcome_columns=[]
+
+
+    # 5. Add true outcome columns (0 days ahead, 7 days ahead, 14 days ahead)
+    outcome_ts_ahead = [0, 7, 14]
+    all_outcome_columns = diff_outcome_columns + diff2_outcome_columns + r0_outcome_columns + data_to_column_map['mobility']['mobility']
+
+    outcome_ts_ahead_columns_map = \
+    tsa_helper.add_forecast_outcomes(subnational_df, groupby_column, all_outcome_columns, outcome_ts_ahead)
+    _ = tsa_helper.add_forecast_outcomes(national_df, groupby_column, all_outcome_columns, outcome_ts_ahead)
+    data_to_column_map['OxCGRT'] = data_to_column_map['OxCGRT'] | {'outcome_columns_forecast': outcome_ts_ahead_columns_map}
+
+
+    # 6. Featurize temporal information: 0 1 2..., month, day of week
+    date_index_column_map, temporal_columns_map = add_temporal_features(subnational_df, date_column)
+    _, _ = add_temporal_features(national_df, date_column)
+
+    data_to_column_map['OxCGRT'] = data_to_column_map['OxCGRT'] | date_index_column_map
+    data_to_column_map['Temporal'] = temporal_columns_map
+
+    # 7. Filter to get weekly data only (day 0 for least variance)
+    subnational_df = subnational_df.loc[subnational_df['Temporal_day_of_week'] == 0]
+    national_df = national_df.loc[national_df['Temporal_day_of_week'] == 0]
+
+    return subnational_df, national_df, data_to_column_map, outcome_ts_ahead_columns_map,\
+           diff_policy_index_columns, diff_outcome_columns, date_column, outcome_columns
+
+
+
+def process_columns(subnational_df, data_to_column_map, outcome_ts_ahead_columns_map, diff_outcome_columns, OxCGRT_policy_columns):
+    # Consolidate columns
+    # OxCGRT_policy_intervention_columns = np.concatenate([list(x) for x in all_policy_intervention_columns_map.values()]).tolist()
+    OxCGRT_policy_raw_intervention_columns = list(data_to_column_map['OxCGRT']['policy_raw_columns_intervention'].values())
+    OxCGRT_policy_support_flag_columns = list(filter(lambda col: col in config.flags_to_include, data_to_column_map['OxCGRT']['policy_support_target_flags']))
+    OxCGRT_policy_index_intervention_columns = list(data_to_column_map['OxCGRT']['policy_index_columns_intervention'].values())
+
+    # Filter: remove Flag columns, separate by static v dynamic
+    all_data_columns_map = {
+        'OxCGRT_policy_columns': list(filter(lambda x: 'Flag' not in x, OxCGRT_policy_columns)), # H7, V4 only (discrete)
+        'OxCGRT_policy_index_columns': data_to_column_map['OxCGRT']['policy_index_columns'], # continuous
+        'OxCGRT_policy_intervention_columns_discrete': OxCGRT_policy_raw_intervention_columns,
+        'OxCGRT_policy_intervention_columns_continuous': OxCGRT_policy_index_intervention_columns,
+        # 'OxCGRT_policy_support_target_flags': OxCGRT_policy_support_flag_columns,
+        'OxCGRT_outcome_columns': diff_outcome_columns,
+        'OxCGRT_outcome_ts_ahead_columns': np.concatenate(list(outcome_ts_ahead_columns_map.values())).tolist(),
+        'OxCGRT_vax_status_columns': data_to_column_map['OxCGRT']['vax_status_columns'], # % vaccinated
+        'Hospital_static_per_100_000_columns': list(filter(lambda col: 'Weekly' not in col, data_to_column_map['hospital']['per_100_000_columns'])),
+        'Hospital_dynamic_per_100_000_columns': list(filter(lambda col: 'Weekly' in col, data_to_column_map['hospital']['per_100_000_columns'])),
+        'Mobility_mobility': data_to_column_map['mobility']['mobility'],
+        'Demographic_pct_columns': data_to_column_map['demographic']['pct_columns'],
+        'Demographic_Median_income': ['Demographic_Median income (dollars)'],
+        'Misc_weighted_population_density': data_to_column_map['misc']['weighted_population_density'],
+        'Misc_political': data_to_column_map['misc']['political'],
+        'Temporal_temporal': data_to_column_map['Temporal']['temporal'],
+        'Wave_wave': data_to_column_map['Wave']['wave'],
+    }
+
+    # Remove variables as needed
+    data_to_remove_columns_map = {
+        'Demographic_pct_columns': ['Demographic_Civilian noninstitutionalized population'],
+        'Temporal_temporal': ['Temporal_month']
+    }
+    [[all_data_columns_map[data_type].remove(col) for col in columns] for data_type,columns in data_to_remove_columns_map.items()]
+    # del all_data_columns_map['OxCGRT_policy_index_columns']
+    all_data_columns = np.concatenate([x for x in all_data_columns_map.values()])
+
+    # Variables for plotting
+    N_columns = len(all_data_columns)
+    get_dims = lambda x: (math.ceil(N_columns/x), x)
+
+    # Get map from Region Code to Region Name (and vice versa)
+    rcode_to_rname = dict(zip(subnational_df.OxCGRT_RegionCode, subnational_df.OxCGRT_RegionName))
+    rname_to_rcode = dict(zip(subnational_df.OxCGRT_RegionName, subnational_df.OxCGRT_RegionCode))
+
+    return all_data_columns_map, rcode_to_rname, rname_to_rcode, N_columns, get_dims
+
+
+
+# Define functions
+def add_lagged_features(df, columns_to_lag, lag):
+    lagged_columns = np.concatenate(list(np.array([f'{x}_{l}' for l in range(1,lag+1)]) for x in columns_to_lag))
+
+    # Add lagged data
+    shifted_data = pd.concat(
+        [df[columns_to_lag + ['OxCGRT_RegionCode', 'OxCGRT_Date']] \
+         .groupby('OxCGRT_RegionCode').shift(l).add_suffix(f'_{l}') \
+            for l in range(lag+1)],
+        axis=1
+    ) # _1 and _2 columns are lagged
+    shifted_data.loc[:, 'OxCGRT_RegionCode'] = df[['OxCGRT_RegionCode']]
+    temp = pd.merge(
+        left=df,
+        right=shifted_data[lagged_columns.tolist() + ['OxCGRT_Date_0', 'OxCGRT_RegionCode']],
+        left_on=['OxCGRT_Date', 'OxCGRT_RegionCode'],
+        right_on=['OxCGRT_Date_0', 'OxCGRT_RegionCode']
+    )
+
+    return temp, lagged_columns 
+
 def make_data_transformer(add_features=False):
     # Define transformers for continuous (float), continuous (int), and categorical variables (imputed)
     pipe1 = [
@@ -1017,3 +1351,9 @@ def make_data_transformer(add_features=False):
     ]
 
     return make_column_transformer(*pipe4)
+
+def process_column(col):
+    if 'pipeline-3' in col: 
+        col2 = col.replace('pipeline-3__', '')
+        return '_'.join(col2.split('_')[:-1])
+    return col.replace('pipeline-1__', '').replace('pipeline-2__', '')
