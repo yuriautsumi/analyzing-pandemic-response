@@ -1,0 +1,49 @@
+/* @media only screen and max-width (920px) {
+    .dash-graph {
+       width: 100% !important;
+       height: 65% !important;
+       position: relative !important;
+   }
+} */
+
+
+/* .dash-graph {
+    zoom: 0.45;
+  } */
+  
+  /* @media (min-width: 475px) {
+    .dash-graph {
+      width: 100% !important;
+      height: 60% !important;
+      position: relative !important;
+      /* zoom: 0.6; */
+    }
+  } */
+  
+  /* @media (min-width: 768px) {
+    .dash-graph {
+        width: 100% !important;
+        height: 85% !important;
+        position: relative !important;  
+      /* zoom: 0.85; */
+    }
+  } */
+  
+  /* @media (min-width: 1024px) {
+    .dash-graph {
+        width: 100% !important;
+        height: 100% !important;
+        position: relative !important;  
+      /* zoom: 1; */
+    }
+  }  */
+/* 
+  @include media-breakpoint-only(xs) { 
+    .col-2-graph {
+
+    }
+   }
+  @include media-breakpoint-only(sm) { ... }
+  @include media-breakpoint-only(md) { ... }
+  @include media-breakpoint-only(lg) { ... }
+  @include media-breakpoint-only(xl) { ... } */
