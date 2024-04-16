@@ -119,23 +119,41 @@ def _save_results(results, path=None):
 
 ## Functions for loading data to databse
 
+# Process columns
+def _filter(col):
+    replace_to_replaced = {'_': ['.', ',', ';', ':', ' ', '-'],
+                           '': ['$', '(', ')']}
+    for k,v in replace_to_replaced.items():
+        for c in v: 
+            col = col.replace(c, k)
+    return col
+
 def _preprocess(df, columns_to_drop):
     # Initial preprocessing
     df_ = df.copy()
     df_.drop(columns=columns_to_drop, inplace=True) # drop duplicate columns
 
-    # Process columns
-    replace_to_replaced = {'_': ['.', ',', ';', ':', ' ', '-'],
-                        '': ['$', '(', ')']}
-    def _filter(col):
-        for k,v in replace_to_replaced.items():
-            for c in v: 
-                col = col.replace(c, k)
-        return col
-
     df_.columns = [_filter(col) for col in df_.columns]
     # columns_text = ', '.join(columns)
     return df_#, columns, columns_text
+
+def _process_data_column_map(data_to_column_map):
+    for k1,v1 in data_to_column_map.items():
+        for k2,v2 in v1.items():
+            if type(v2) == list: 
+                data_to_column_map[k1][k2] = [_filter(col) for col in v2]
+            elif type(v2) == tuple:
+                data_to_column_map[k1][k2] = ([_filter(col) for col in v2[0]], v2[1])
+            elif type(list(v2.values())[0]) == list: # dictionary with values being lists
+                data_to_column_map[k1][k2] = {
+                    _filter(k): [_filter(col) for col in v]  for k,v in v2.items()
+                }
+            else:
+                data_to_column_map[k1][k2] = {
+                    _filter(k): _filter(v)  for k,v in v2.items()
+                } 
+
+    return data_to_column_map
 
 def _get_sql_type_map(df_):
     # Map dtypes to SQL types

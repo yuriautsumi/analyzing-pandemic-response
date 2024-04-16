@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
+import plotly.express as px
 import plotly.graph_objects as go
 
 from textwrap import wrap
@@ -18,6 +19,9 @@ from statsmodels.tsa.seasonal import STL, MSTL
 
 import data_helper
 
+
+PLOTLY_COLORS = px.colors.qualitative.Dark24 + px.colors.qualitative.Plotly 
+# print(f"PLOTLY_COLORS: {len(PLOTLY_COLORS)}")
 # pd.options.plotting.backend = "plotly"
 
 def plot_boxplot(df, columns, n_rows, n_cols, title=None, save_path=None, align_axes=False):
@@ -63,7 +67,7 @@ def get_vline_labels(df, date_col, d):
     return month_starts, year_starts
 
 
-def plot_lines(df, x_col, y_columns, vlines=None, fig=None, fig_params=None, same_axis=True, title=None):
+def plot_lines(df, x_col, y_columns, vlines=None, fig=None, fig_params=None, same_axis=True, title=None, legend=True, dimensions=None):
     """ Plot run-sequence plot. 
     
     Args:
@@ -89,8 +93,9 @@ def plot_lines(df, x_col, y_columns, vlines=None, fig=None, fig_params=None, sam
     if fig_params is None: fig_params = {}
 
     # Add traces for both lines to the same plot
+    # print(f'NUM y_columns: {len(y_columns)}')
     for i, y_col in enumerate(y_columns):
-        if is_plotly: params = {'x': df[x_col], 'y': df[y_col], 'name': y_col, 'yaxis': f'y{i+1}'}
+        if is_plotly: params = {'x': df[x_col], 'y': df[y_col], 'name': y_col, 'yaxis': f'y{i+1}', 'marker': {'color': PLOTLY_COLORS[i]}}
         else: 
             params = (df[x_col], df[y_col]) #{'x': df[x_col], 'y': df[y_col]}
             if not same_axis and i==1: fig = fig.twinx()
@@ -99,8 +104,8 @@ def plot_lines(df, x_col, y_columns, vlines=None, fig=None, fig_params=None, sam
 
     # Add vertical lines 
     if vlines is not None: 
-        for c, xs in vlines.items():
-            for x in xs:
+        for c, (xs, xnames) in vlines.items():
+            for x,name in zip(xs, xnames):
                 if is_plotly: params = {'x': x, 'line_color': c, 'line_dash': 'dot', 'opacity': 0.5}
                 else: params = {'x': x, 'color': c, 'linestyle': '.', 'alpha': 0.5}
                 # if not same_axis: fig, fig1 = fig0, fig
@@ -117,6 +122,8 @@ def plot_lines(df, x_col, y_columns, vlines=None, fig=None, fig_params=None, sam
             yaxis=dict(title=y_columns[0], side='left'),
             yaxis2=dict(title=y_columns[1], side='right', overlaying='y'),
         )
+    fig.update(layout_showlegend=legend)
+    if dimensions is not None: fig.update_layout(dict(autosize=True,width=dimensions[0],height=dimensions[1],))
     if fig is None: fig.show()
     else: return fig
 
