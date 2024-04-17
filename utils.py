@@ -48,16 +48,6 @@ def filter_data_to_column_map(data_to_column_map):
             else: data_to_column_map[k][k2] = (v2_filtered, v2_dict)
     return data_to_column_map
 
-# def get_treatment_disc_to_scaled_values_map(df, column_names_to_node_name):
-#     node_prefix = config.node_category_to_prefix['treatments_disc']
-#     treatment_ch_prefix, treatment_ev_prefix = f'{node_prefix}_ch', f'{node_prefix}_ev'
-#     treatment_to_scaled_values = {}
-#     for col, node in column_names_to_node_name:
-#         if (treatment_ch_prefix in node) or (treatment_ev_prefix in node): 
-#             unique_values = df[node].unique(); unique_values.sort()
-#             treatment_to_scaled_values[col] = (node, unique_values, np.arange(len(unique_values)))
-#     return treatment_to_scaled_values
-
 
 def load_artifacts(national_artifacts_dir):
     # Load artifacts (data, estimands, model)
