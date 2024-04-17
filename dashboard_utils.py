@@ -72,9 +72,9 @@ def process_column_name(col, data_category):
     elif data_category == 'policy-index':
         return col.replace('OxCGRT_', '').replace('_', ' ').replace('Index', ' Index').replace(' Average', '')
     elif data_category == 'policy-index-intervention':
-        return col.replace('OxCGRT_', '').replace('_', ' ').replace('Index', ' Index').replace(' Average', '').replace('_intervention', '')
+        return col.replace('OxCGRT_', '').replace('_', ' ').replace('Index', ' Index').replace(' Average', '').replace(' diff7 intervention', '')
     elif data_category == 'policy-raw-intervention':
-        return col.replace('OxCGRT_', '').replace('_', ' ').replace('_intervention', '')
+        return col.replace('OxCGRT_', '').replace('_', ' ').replace(' diff7 intervention', '')
     elif data_category == 'hospital': 
         return col.replace('Hospital_', '').replace('_', ' ').replace('100 000', '100k')
     return col
@@ -247,7 +247,8 @@ def add_wave_shading(fig):
         ))
     return fig
 
-def plot_interventions(data_category, region_level, region_code, date_column, ymin, ymax, fig, subcategory=None):
+def plot_interventions(data_category, region_level, region_code, date_column, 
+                       ymin, ymax, fig, row_ix, col_ix, subcategory=None):
     threshold = data_category_to_intervention_artifacts[data_category]
 
     # Query data
@@ -299,10 +300,12 @@ def plot_interventions(data_category, region_level, region_code, date_column, ym
             intervention_tuples+=a2
 
     _get_color = lambda val: 'blue' if val<0 else 'red'
-
+    # return intervention_tuples
+    # print(intervention_tuples)
     # Plot 
     delta = ymax-ymin
     for date, val, name in intervention_tuples:
+        # print(val, name, date)
         fig.add_trace(
             go.Scatter(
                 x=[date, date],
@@ -315,7 +318,7 @@ def plot_interventions(data_category, region_level, region_code, date_column, ym
                 # line_style='dot',
                 name=name,
                 showlegend=False,
-                hovertemplate=f'{val:.2f}'))
+                hovertemplate=f'{val:.2f}'), row=row_ix, col=col_ix)
     
     return fig, len(intervention_tuples)
 

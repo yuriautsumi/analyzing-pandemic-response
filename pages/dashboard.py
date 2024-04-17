@@ -115,7 +115,12 @@ geographic_map_content = dbc.Container([
             dcc.Graph(
                 figure=fig,
                 id='choropleth'
-            ) #width=12, xl=6, lg=6, md=12, sm=12, xs=12),
+            ),
+            dcc.Loading(
+                id="loading-0",
+                type="default",
+                children=html.Div(id="choropleth")
+            ),
         ], id='col-xl-12')
     ])
 ])
@@ -194,7 +199,12 @@ def render_tab_content(active_tab, data):
             return dbc.Container([
                 dropdown_menu,
                 # intervention_dropdown,
-                dbc.CardBody(html.P(id='demographics-stack'))
+                dbc.CardBody(html.P(id='demographics-stack')),
+                dcc.Loading(
+                    id="loading-1",
+                    type="default",
+                    children=html.Div(id="demographics-stack")
+                ),
             ])
         
         elif active_tab == "time-series":
@@ -210,7 +220,12 @@ def render_tab_content(active_tab, data):
             return dbc.Container([
                 dropdown_menu,
                 # intervention_dropdown,
-                dbc.CardBody(html.P(id='time-series-stack'))
+                dbc.CardBody(html.P(id='time-series-stack')),
+                dcc.Loading(
+                    id="loading-2",
+                    type="default",
+                    children=html.Div(id="time-series-stack")
+                ),
             ])
         
         elif active_tab == "policy":
@@ -226,7 +241,12 @@ def render_tab_content(active_tab, data):
             return dbc.Container([
                 dropdown_menu,
                 # intervention_dropdown,
-                dbc.CardBody(html.P(id='policy-stack'))
+                dbc.CardBody(html.P(id='policy-stack')),
+                dcc.Loading(
+                    id="loading-3",
+                    type="default",
+                    children=html.Div(id="policy-stack")
+                ),
             ])
 
     return "No tab selected"
@@ -277,7 +297,8 @@ def generate_graphs(selectedData, store_data):
             _, _, _, (ymin,ymax),_ = data_category_to_args[data_category]
             intervention_category_to_N = {'policy-index-intervention': {}, 'policy-raw-intervention': {}}
             for intervention_category, subcategory in zip(['policy-index-intervention']+['policy-raw-intervention']*4, [None, 'C', 'H', 'E', 'V']):
-                fig, N_interventions = plot_interventions(intervention_category, 'national', None, index_columns[0], ymin, ymax, fig, subcategory=subcategory)
+                fig, N_interventions = plot_interventions(intervention_category, 'national', None, index_columns[0], 
+                                                          ymin, ymax, fig, None, None, subcategory=subcategory)
                 intervention_category_to_N[intervention_category][subcategory] = N_interventions
 
             fig.update_layout(title_text=data_category_to_title[data_category])
@@ -292,7 +313,7 @@ def generate_graphs(selectedData, store_data):
     elif selectedData is not None:
         # Process selected states
         selected = [f'US_' + sdata['location'] for sdata in selectedData['points']]
-        for rcode in STATE_REGION_CODES: 
+        for i,rcode in enumerate(STATE_REGION_CODES): 
             # Update if no longer selected
             if  (rcode not in selected) and (rcode in store_data['locations']): store_data['locations'].remove(rcode)
             # Add if newly selected
@@ -323,7 +344,8 @@ def generate_graphs(selectedData, store_data):
                     _, _, _, (ymin,ymax),_ = data_category_to_args[data_category]; intervention_category_to_N = {}
                     intervention_category_to_N = {'policy-index-intervention': {}, 'policy-raw-intervention': {}}
                     for intervention_category, subcategory in zip(['policy-index-intervention']+['policy-raw-intervention']*4, [None, 'C', 'H', 'E', 'V']):
-                        fig, N_interventions = plot_interventions(intervention_category, 'subnational', rcode, index_columns[0], ymin, ymax, fig, subcategory=subcategory)
+                        fig, N_interventions = plot_interventions(intervention_category, 'subnational', rcode, index_columns[0], 
+                                                                  ymin, ymax, fig, None, None, subcategory=subcategory)
                         intervention_category_to_N[intervention_category][subcategory] = N_interventions
 
                     fig.update_layout(title_text=data_category_to_title[data_category])
