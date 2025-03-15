@@ -4,7 +4,7 @@ CIC COVID Student Working Group
 
 ## Status
 
-* Version 1: Worked on Winter 2023 to Spring 2024. See issue for existing status.
+* Version 1: See issue for existing status.
 
 ## Datasets
 * OxCGRT Policy [[Source](https://github.com/OxCGRT/covid-policy-dataset)]
