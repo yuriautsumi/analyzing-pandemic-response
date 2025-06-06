@@ -1,0 +1,252 @@
+# G-computation
+* Estimate conditional distribution of outcome and covariates in dynamic treatment regime in the presence of treatment-confounder feedback, under g-formula
+* Analyzing dynamic treatment policies by simulating trajectories under state and national-level strategies.
+
+```{r}
+install.packages("gfoRmula")
+install.packages("reticulate")
+install.packages("Hmisc")
+install.packages("dplyr")
+```
+
+```{r}
+library(gfoRmula)
+library(reticulate)
+library(Hmisc)
+library(dplyr)
+use_condaenv("cic")
+# t0 = time, id = patient ID, 
+# L1 = categorical covariate, L2 = continuous covariate, L3 = baseline covariate 
+# A = treatment, Y = outcome 
+#data(basicdata) # survival outcome, with censoring, static treatment
+#data(basicdata_nocomp) # survival outcome, without censoring, static treatment
+#data(binary_eofdata) # binary outcome at end of followup, time varying treatment
+data(censor_data) # survival outcome with indicator of censoring, time varying treatment
+#data(continuous_eofdata) # continuous outcome at end of followup 
+#data(continuous_eofdata_pb) # continuous outcome at end of followup with pre-baseline times
+```
+
+
+```{r}
+#filename <- "/Users/yutsumi/cic-covid-working-group/covid-policy/data/RDS/subnational_df.rds"
+#subnational_df <- readRDS("/Users/yutsumi/cic-covid-working-group/covid-policy/data/RDS/subnational_df.rds")
+pd <- import("pandas")
+filename <- "/Users/yutsumi/cic-covid-working-group/covid-policy/data/dataframe/subnational_df.pickle"
+subnational_df <- pd$read_pickle(filename)
+```
+
+```{r}
+mediators <- c(
+#  'Mobility_retail_and_recreation_percent_change_from_baseline',
+  'Mobility_grocery_and_pharmacy_percent_change_from_baseline',
+  'Mobility_parks_percent_change_from_baseline',
+  'Mobility_transit_stations_percent_change_from_baseline',
+#  'Mobility_workplaces_percent_change_from_baseline',
+#  'Mobility_residential_percent_change_from_baseline',
+  'OxCGRT_PopulationVaccinated_encoded'
+#  'OxCGRT_PopulationVaccinated'
+) # vax rate, mobility %ages
+confounders <- c() # 
+baseline_confounders <- c(
+  'Demographic_65_years_and_over',
+#  'Demographic_White',
+  'Demographic_Black_or_African_American',
+#  'Demographic_Hispanic_or_Latino_(of_any_race)',
+#  'Demographic_Population_for_whom_poverty_status_is_determined',
+  'Demographic_Less_than_10_000', 'Demographic_10_000_to_14_999',
+#  'Demographic_15_000_to_24_999', 'Demographic_25_000_to_34_999',
+#  'Demographic_35_000_to_49_999', 'Demographic_Median_income_(dollars)',
+#  'Demographic_Civilian_noninstitutionalized_population',
+  'Misc_Population_Density__-_weighted_[per_km2]',
+#  'Hospital_N_CCN_per_100_000',
+  'Hospital_Certified_Bed_Count_per_100_000'
+) # demographics, bed count, ccn count
+treatments <- c(
+  'OxCGRT_C1M_School_closing',
+  'OxCGRT_C2M_Workplace_closing',
+  'OxCGRT_C3M_Cancel_public_events',
+  'OxCGRT_C4M_Restrictions_on_gatherings',
+  'OxCGRT_C5M_Close_public_transport',
+  'OxCGRT_C6M_Stay_at_home_requirements',
+  'OxCGRT_C7M_Restrictions_on_internal_movement',
+  'OxCGRT_C8EV_International_travel_controls', 
+  'OxCGRT_H1_Public_information_campaigns',
+  'OxCGRT_H6M_Facial_Coverings'
+  # 'OxCGRT_E1_Income_support',
+  # 'OxCGRT_E2_Debt_contract_relief',
+  # 'OxCGRT_E3_Fiscal_measures', 'OxCGRT_E4_International_support',
+  # 'OxCGRT_H1_Public_information_campaigns',
+  # 'OxCGRT_H2_Testing_policy', 'OxCGRT_H3_Contact_tracing',
+  # 'OxCGRT_H4_Emergency_investment_in_healthcare',
+  # 'OxCGRT_H5_Investment_in_vaccines', 'OxCGRT_H6M_Facial_Coverings',
+  # 'OxCGRT_H7_Vaccination_policy',
+  # 'OxCGRT_H8M_Protection_of_elderly_people',
+  # 'OxCGRT_V1_Vaccine_Prioritisation__summary_',
+  # 'OxCGRT_V2A_Vaccine_Availability__summary_',
+  # 'OxCGRT_V2B_Vaccine_age_eligibility_availability_age_floor__general_population_summary_',
+  # 'OxCGRT_V2C_Vaccine_age_eligibility_availability_age_floor__at_risk_summary_',
+  # 'OxCGRT_V2D_Medically__clinically_vulnerable__Non_elderly_',
+  # 'OxCGRT_V2E_Education',
+  # 'OxCGRT_V2F_Frontline_workers___non_healthcare_',
+  # 'OxCGRT_V2G_Frontline_workers___healthcare_',
+  # 'OxCGRT_V3_Vaccine_Financial_Support__summary_',
+  # 'OxCGRT_V4_Mandatory_Vaccination__summary_'
+) # policies C,E,H,V
+
+baseline_confounders_B <- paste0("B", 1:length(baseline_confounders)) # to use in funcs
+baseline_vals <-  paste0("B", 1:length(baseline_confounders))
+names(baseline_vals) <- baseline_confounders
+names(baseline_confounders) <- baseline_vals
+```
+
+
+
+
+```{r}
+ ## Estimating the effect of treatment strategies on the mean of a continuous
+    ## end of follow-up outcome
+    # ID = states 
+    id <- 'OxCGRT_RegionCode' #'id'
+    # Time = dates
+    time_points <- 1096 
+    time_name <- 'OxCGRT_Date' #'t0'
+    # Covariates = time varying confounders + treatment 
+    covnames_og <- c(confounders, mediators, treatments) # treatment = last in ordering #c('L1', 'L2', 'A')
+    covnames_L <- paste0("L", 1:length(covnames_og)) # to use in functions
+    vals <- paste0("L", 1:length(covnames_og))
+    names(vals) <- covnames_og # vals to look up by original name
+    names(covnames_og) <- vals # covnames_og to look up by L# (e.g. L3)
+    # Outcome = cases per day
+    outcome_name <- 'OxCGRT_ConfirmedCases' #'Y'
+    # Other: Include baseline covariates in covariate and outcome (y) models
+    covtypes <- c(
+      'normal', 'normal', 'normal', 
+      'categorical', 'categorical', 'categorical', 'categorical', 'categorical', 
+      'categorical', 'categorical', 'categorical', 'categorical', 'categorical', 
+      'categorical'
+    )
+    # covtypes <- c('normal', 'normal', 'normal', 'normal', 'normal', 'normal',
+    #               'categorical', 'normal', 
+    #               'categorical', 'categorical', 'categorical', 'categorical', 
+    #               'categorical', 'categorical', 'categorical', 'categorical', 
+    #               'categorical', 'categorical', 'categorical', 'categorical', 
+    #               'categorical', 'categorical', 'categorical', 'categorical', 
+    #               'categorical', 'categorical', 'categorical', 'categorical', 
+    #               'categorical', 'categorical', 'categorical', 'categorical', 
+    #               'categorical', 'categorical', 'categorical', 'categorical', 
+    #               'categorical', 'categorical')
+    histories <- c(lagged)
+    histvars <- list(covnames_L)
+    #histvars <- list(c('A', 'L1', 'L2'))
+    covparams <- list(covmodels = c(
+      #L1 ~ lag1_L1 + ... + lag1_L38 + B1 + ... + B15,
+      #L2 ~ lag1_L1 + ... + lag1_L38 + B1 + ... + B15 + L1,
+      #L3 ~ lag1_L1 + ... + lag1_L38 + B1 + ... + B15 + L1 + L2,
+      #L4 ~ lag1_L1 + ... + lag1_L38 + B1 + ... + B15 + L1 + L2 + L3,
+      L1 ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + B1 + B2 + B3 + B4 + B5 + B6, 
+      L2 ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + B1 + B2 + B3 + B4 + B5 + B6 + L1, 
+      L3 ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + B1 + B2 + B3 + B4 + B5 + B6 + L1 + L2, 
+      L4 ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + B1 + B2 + B3 + B4 + B5 + B6 + L1 + L2 + L3, 
+      L5 ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + B1 + B2 + B3 + B4 + B5 + B6 + L1 + L2 + L3 + L4, 
+      L6 ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + B1 + B2 + B3 + B4 + B5 + B6 + L1 + L2 + L3 + L4 + L5, 
+      L7 ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + B1 + B2 + B3 + B4 + B5 + B6 + L1 + L2 + L3 + L4 + L5 + L6, 
+      L8 ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + B1 + B2 + B3 + B4 + B5 + B6 + L1 + L2 + L3 + L4 + L5 + L6 + L7, 
+      L9 ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + B1 + B2 + B3 + B4 + B5 + B6 + L1 + L2 + L3 + L4 + L5 + L6 + L7 + L8, 
+      L10 ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + B1 + B2 + B3 + B4 + B5 + B6 + L1 + L2 + L3 + L4 + L5 + L6 + L7 + L8 + L9, 
+      L11 ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + B1 + B2 + B3 + B4 + B5 + B6 + L1 + L2 + L3 + L4 + L5 + L6 + L7 + L8 + L9 + L10, 
+      L12 ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + B1 + B2 + B3 + B4 + B5 + B6 + L1 + L2 + L3 + L4 + L5 + L6 + L7 + L8 + L9 + L10 + L11, 
+      L13 ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + B1 + B2 + B3 + B4 + B5 + B6 + L1 + L2 + L3 + L4 + L5 + L6 + L7 + L8 + L9 + L10 + L11 + L12, 
+      L14 ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + B1 + B2 + B3 + B4 + B5 + B6 + L1 + L2 + L3 + L4 + L5 + L6 + L7 + L8 + L9 + L10 + L11 + L12 + L13
+      # L1 ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + lag1_L15 + lag1_L16 + lag1_L17 + lag1_L18 + lag1_L19 + lag1_L20 + lag1_L21 + lag1_L22 + lag1_L23 + lag1_L24 + lag1_L25 + lag1_L26 + lag1_L27 + lag1_L28 + lag1_L29 + lag1_L30 + lag1_L31 + lag1_L32 + lag1_L33 + lag1_L34 + lag1_L35 + lag1_L36 + lag1_L37 + lag1_L38 + B1 + B2 + B3 + B4 + B5 + B6 + B7 + B8 + B9 + B10 + B11 + B12 + B13 + B14 + B15, 
+      # L2 ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + lag1_L15 + lag1_L16 + lag1_L17 + lag1_L18 + lag1_L19 + lag1_L20 + lag1_L21 + lag1_L22 + lag1_L23 + lag1_L24 + lag1_L25 + lag1_L26 + lag1_L27 + lag1_L28 + lag1_L29 + lag1_L30 + lag1_L31 + lag1_L32 + lag1_L33 + lag1_L34 + lag1_L35 + lag1_L36 + lag1_L37 + lag1_L38 + B1 + B2 + B3 + B4 + B5 + B6 + B7 + B8 + B9 + B10 + B11 + B12 + B13 + B14 + B15 + L1, 
+      # L3 ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + lag1_L15 + lag1_L16 + lag1_L17 + lag1_L18 + lag1_L19 + lag1_L20 + lag1_L21 + lag1_L22 + lag1_L23 + lag1_L24 + lag1_L25 + lag1_L26 + lag1_L27 + lag1_L28 + lag1_L29 + lag1_L30 + lag1_L31 + lag1_L32 + lag1_L33 + lag1_L34 + lag1_L35 + lag1_L36 + lag1_L37 + lag1_L38 + B1 + B2 + B3 + B4 + B5 + B6 + B7 + B8 + B9 + B10 + B11 + B12 + B13 + B14 + B15 + L1 + L2, 
+      # L4 ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + lag1_L15 + lag1_L16 + lag1_L17 + lag1_L18 + lag1_L19 + lag1_L20 + lag1_L21 + lag1_L22 + lag1_L23 + lag1_L24 + lag1_L25 + lag1_L26 + lag1_L27 + lag1_L28 + lag1_L29 + lag1_L30 + lag1_L31 + lag1_L32 + lag1_L33 + lag1_L34 + lag1_L35 + lag1_L36 + lag1_L37 + lag1_L38 + B1 + B2 + B3 + B4 + B5 + B6 + B7 + B8 + B9 + B10 + B11 + B12 + B13 + B14 + B15 + L1 + L2 + L3, 
+      # L5 ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + lag1_L15 + lag1_L16 + lag1_L17 + lag1_L18 + lag1_L19 + lag1_L20 + lag1_L21 + lag1_L22 + lag1_L23 + lag1_L24 + lag1_L25 + lag1_L26 + lag1_L27 + lag1_L28 + lag1_L29 + lag1_L30 + lag1_L31 + lag1_L32 + lag1_L33 + lag1_L34 + lag1_L35 + lag1_L36 + lag1_L37 + lag1_L38 + B1 + B2 + B3 + B4 + B5 + B6 + B7 + B8 + B9 + B10 + B11 + B12 + B13 + B14 + B15 + L1 + L2 + L3 + L4, 
+      # L6 ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + lag1_L15 + lag1_L16 + lag1_L17 + lag1_L18 + lag1_L19 + lag1_L20 + lag1_L21 + lag1_L22 + lag1_L23 + lag1_L24 + lag1_L25 + lag1_L26 + lag1_L27 + lag1_L28 + lag1_L29 + lag1_L30 + lag1_L31 + lag1_L32 + lag1_L33 + lag1_L34 + lag1_L35 + lag1_L36 + lag1_L37 + lag1_L38 + B1 + B2 + B3 + B4 + B5 + B6 + B7 + B8 + B9 + B10 + B11 + B12 + B13 + B14 + B15 + L1 + L2 + L3 + L4 + L5, 
+      # L7 ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + lag1_L15 + lag1_L16 + lag1_L17 + lag1_L18 + lag1_L19 + lag1_L20 + lag1_L21 + lag1_L22 + lag1_L23 + lag1_L24 + lag1_L25 + lag1_L26 + lag1_L27 + lag1_L28 + lag1_L29 + lag1_L30 + lag1_L31 + lag1_L32 + lag1_L33 + lag1_L34 + lag1_L35 + lag1_L36 + lag1_L37 + lag1_L38 + B1 + B2 + B3 + B4 + B5 + B6 + B7 + B8 + B9 + B10 + B11 + B12 + B13 + B14 + B15 + L1 + L2 + L3 + L4 + L5 + L6, 
+      # L8 ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + lag1_L15 + lag1_L16 + lag1_L17 + lag1_L18 + lag1_L19 + lag1_L20 + lag1_L21 + lag1_L22 + lag1_L23 + lag1_L24 + lag1_L25 + lag1_L26 + lag1_L27 + lag1_L28 + lag1_L29 + lag1_L30 + lag1_L31 + lag1_L32 + lag1_L33 + lag1_L34 + lag1_L35 + lag1_L36 + lag1_L37 + lag1_L38 + B1 + B2 + B3 + B4 + B5 + B6 + B7 + B8 + B9 + B10 + B11 + B12 + B13 + B14 + B15 + L1 + L2 + L3 + L4 + L5 + L6 + L7, 
+      # L9 ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + lag1_L15 + lag1_L16 + lag1_L17 + lag1_L18 + lag1_L19 + lag1_L20 + lag1_L21 + lag1_L22 + lag1_L23 + lag1_L24 + lag1_L25 + lag1_L26 + lag1_L27 + lag1_L28 + lag1_L29 + lag1_L30 + lag1_L31 + lag1_L32 + lag1_L33 + lag1_L34 + lag1_L35 + lag1_L36 + lag1_L37 + lag1_L38 + B1 + B2 + B3 + B4 + B5 + B6 + B7 + B8 + B9 + B10 + B11 + B12 + B13 + B14 + B15 + L1 + L2 + L3 + L4 + L5 + L6 + L7 + L8, 
+      # L10 ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + lag1_L15 + lag1_L16 + lag1_L17 + lag1_L18 + lag1_L19 + lag1_L20 + lag1_L21 + lag1_L22 + lag1_L23 + lag1_L24 + lag1_L25 + lag1_L26 + lag1_L27 + lag1_L28 + lag1_L29 + lag1_L30 + lag1_L31 + lag1_L32 + lag1_L33 + lag1_L34 + lag1_L35 + lag1_L36 + lag1_L37 + lag1_L38 + B1 + B2 + B3 + B4 + B5 + B6 + B7 + B8 + B9 + B10 + B11 + B12 + B13 + B14 + B15 + L1 + L2 + L3 + L4 + L5 + L6 + L7 + L8 + L9, 
+      # L11 ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + lag1_L15 + lag1_L16 + lag1_L17 + lag1_L18 + lag1_L19 + lag1_L20 + lag1_L21 + lag1_L22 + lag1_L23 + lag1_L24 + lag1_L25 + lag1_L26 + lag1_L27 + lag1_L28 + lag1_L29 + lag1_L30 + lag1_L31 + lag1_L32 + lag1_L33 + lag1_L34 + lag1_L35 + lag1_L36 + lag1_L37 + lag1_L38 + B1 + B2 + B3 + B4 + B5 + B6 + B7 + B8 + B9 + B10 + B11 + B12 + B13 + B14 + B15 + L1 + L2 + L3 + L4 + L5 + L6 + L7 + L8 + L9 + L10, 
+      # L12 ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + lag1_L15 + lag1_L16 + lag1_L17 + lag1_L18 + lag1_L19 + lag1_L20 + lag1_L21 + lag1_L22 + lag1_L23 + lag1_L24 + lag1_L25 + lag1_L26 + lag1_L27 + lag1_L28 + lag1_L29 + lag1_L30 + lag1_L31 + lag1_L32 + lag1_L33 + lag1_L34 + lag1_L35 + lag1_L36 + lag1_L37 + lag1_L38 + B1 + B2 + B3 + B4 + B5 + B6 + B7 + B8 + B9 + B10 + B11 + B12 + B13 + B14 + B15 + L1 + L2 + L3 + L4 + L5 + L6 + L7 + L8 + L9 + L10 + L11, 
+      # L13 ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + lag1_L15 + lag1_L16 + lag1_L17 + lag1_L18 + lag1_L19 + lag1_L20 + lag1_L21 + lag1_L22 + lag1_L23 + lag1_L24 + lag1_L25 + lag1_L26 + lag1_L27 + lag1_L28 + lag1_L29 + lag1_L30 + lag1_L31 + lag1_L32 + lag1_L33 + lag1_L34 + lag1_L35 + lag1_L36 + lag1_L37 + lag1_L38 + B1 + B2 + B3 + B4 + B5 + B6 + B7 + B8 + B9 + B10 + B11 + B12 + B13 + B14 + B15 + L1 + L2 + L3 + L4 + L5 + L6 + L7 + L8 + L9 + L10 + L11 + L12, 
+      # L14 ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + lag1_L15 + lag1_L16 + lag1_L17 + lag1_L18 + lag1_L19 + lag1_L20 + lag1_L21 + lag1_L22 + lag1_L23 + lag1_L24 + lag1_L25 + lag1_L26 + lag1_L27 + lag1_L28 + lag1_L29 + lag1_L30 + lag1_L31 + lag1_L32 + lag1_L33 + lag1_L34 + lag1_L35 + lag1_L36 + lag1_L37 + lag1_L38 + B1 + B2 + B3 + B4 + B5 + B6 + B7 + B8 + B9 + B10 + B11 + B12 + B13 + B14 + B15 + L1 + L2 + L3 + L4 + L5 + L6 + L7 + L8 + L9 + L10 + L11 + L12 + L13, 
+      # L15 ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + lag1_L15 + lag1_L16 + lag1_L17 + lag1_L18 + lag1_L19 + lag1_L20 + lag1_L21 + lag1_L22 + lag1_L23 + lag1_L24 + lag1_L25 + lag1_L26 + lag1_L27 + lag1_L28 + lag1_L29 + lag1_L30 + lag1_L31 + lag1_L32 + lag1_L33 + lag1_L34 + lag1_L35 + lag1_L36 + lag1_L37 + lag1_L38 + B1 + B2 + B3 + B4 + B5 + B6 + B7 + B8 + B9 + B10 + B11 + B12 + B13 + B14 + B15 + L1 + L2 + L3 + L4 + L5 + L6 + L7 + L8 + L9 + L10 + L11 + L12 + L13 + L14, 
+      # L16 ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + lag1_L15 + lag1_L16 + lag1_L17 + lag1_L18 + lag1_L19 + lag1_L20 + lag1_L21 + lag1_L22 + lag1_L23 + lag1_L24 + lag1_L25 + lag1_L26 + lag1_L27 + lag1_L28 + lag1_L29 + lag1_L30 + lag1_L31 + lag1_L32 + lag1_L33 + lag1_L34 + lag1_L35 + lag1_L36 + lag1_L37 + lag1_L38 + B1 + B2 + B3 + B4 + B5 + B6 + B7 + B8 + B9 + B10 + B11 + B12 + B13 + B14 + B15 + L1 + L2 + L3 + L4 + L5 + L6 + L7 + L8 + L9 + L10 + L11 + L12 + L13 + L14 + L15, 
+      # L17 ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + lag1_L15 + lag1_L16 + lag1_L17 + lag1_L18 + lag1_L19 + lag1_L20 + lag1_L21 + lag1_L22 + lag1_L23 + lag1_L24 + lag1_L25 + lag1_L26 + lag1_L27 + lag1_L28 + lag1_L29 + lag1_L30 + lag1_L31 + lag1_L32 + lag1_L33 + lag1_L34 + lag1_L35 + lag1_L36 + lag1_L37 + lag1_L38 + B1 + B2 + B3 + B4 + B5 + B6 + B7 + B8 + B9 + B10 + B11 + B12 + B13 + B14 + B15 + L1 + L2 + L3 + L4 + L5 + L6 + L7 + L8 + L9 + L10 + L11 + L12 + L13 + L14 + L15 + L16, 
+      # L18 ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + lag1_L15 + lag1_L16 + lag1_L17 + lag1_L18 + lag1_L19 + lag1_L20 + lag1_L21 + lag1_L22 + lag1_L23 + lag1_L24 + lag1_L25 + lag1_L26 + lag1_L27 + lag1_L28 + lag1_L29 + lag1_L30 + lag1_L31 + lag1_L32 + lag1_L33 + lag1_L34 + lag1_L35 + lag1_L36 + lag1_L37 + lag1_L38 + B1 + B2 + B3 + B4 + B5 + B6 + B7 + B8 + B9 + B10 + B11 + B12 + B13 + B14 + B15 + L1 + L2 + L3 + L4 + L5 + L6 + L7 + L8 + L9 + L10 + L11 + L12 + L13 + L14 + L15 + L16 + L17, 
+      # L19 ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + lag1_L15 + lag1_L16 + lag1_L17 + lag1_L18 + lag1_L19 + lag1_L20 + lag1_L21 + lag1_L22 + lag1_L23 + lag1_L24 + lag1_L25 + lag1_L26 + lag1_L27 + lag1_L28 + lag1_L29 + lag1_L30 + lag1_L31 + lag1_L32 + lag1_L33 + lag1_L34 + lag1_L35 + lag1_L36 + lag1_L37 + lag1_L38 + B1 + B2 + B3 + B4 + B5 + B6 + B7 + B8 + B9 + B10 + B11 + B12 + B13 + B14 + B15 + L1 + L2 + L3 + L4 + L5 + L6 + L7 + L8 + L9 + L10 + L11 + L12 + L13 + L14 + L15 + L16 + L17 + L18, 
+      # L20 ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + lag1_L15 + lag1_L16 + lag1_L17 + lag1_L18 + lag1_L19 + lag1_L20 + lag1_L21 + lag1_L22 + lag1_L23 + lag1_L24 + lag1_L25 + lag1_L26 + lag1_L27 + lag1_L28 + lag1_L29 + lag1_L30 + lag1_L31 + lag1_L32 + lag1_L33 + lag1_L34 + lag1_L35 + lag1_L36 + lag1_L37 + lag1_L38 + B1 + B2 + B3 + B4 + B5 + B6 + B7 + B8 + B9 + B10 + B11 + B12 + B13 + B14 + B15 + L1 + L2 + L3 + L4 + L5 + L6 + L7 + L8 + L9 + L10 + L11 + L12 + L13 + L14 + L15 + L16 + L17 + L18 + L19, 
+      # L21 ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + lag1_L15 + lag1_L16 + lag1_L17 + lag1_L18 + lag1_L19 + lag1_L20 + lag1_L21 + lag1_L22 + lag1_L23 + lag1_L24 + lag1_L25 + lag1_L26 + lag1_L27 + lag1_L28 + lag1_L29 + lag1_L30 + lag1_L31 + lag1_L32 + lag1_L33 + lag1_L34 + lag1_L35 + lag1_L36 + lag1_L37 + lag1_L38 + B1 + B2 + B3 + B4 + B5 + B6 + B7 + B8 + B9 + B10 + B11 + B12 + B13 + B14 + B15 + L1 + L2 + L3 + L4 + L5 + L6 + L7 + L8 + L9 + L10 + L11 + L12 + L13 + L14 + L15 + L16 + L17 + L18 + L19 + L20, 
+      # L22 ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + lag1_L15 + lag1_L16 + lag1_L17 + lag1_L18 + lag1_L19 + lag1_L20 + lag1_L21 + lag1_L22 + lag1_L23 + lag1_L24 + lag1_L25 + lag1_L26 + lag1_L27 + lag1_L28 + lag1_L29 + lag1_L30 + lag1_L31 + lag1_L32 + lag1_L33 + lag1_L34 + lag1_L35 + lag1_L36 + lag1_L37 + lag1_L38 + B1 + B2 + B3 + B4 + B5 + B6 + B7 + B8 + B9 + B10 + B11 + B12 + B13 + B14 + B15 + L1 + L2 + L3 + L4 + L5 + L6 + L7 + L8 + L9 + L10 + L11 + L12 + L13 + L14 + L15 + L16 + L17 + L18 + L19 + L20 + L21, 
+      # L23 ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + lag1_L15 + lag1_L16 + lag1_L17 + lag1_L18 + lag1_L19 + lag1_L20 + lag1_L21 + lag1_L22 + lag1_L23 + lag1_L24 + lag1_L25 + lag1_L26 + lag1_L27 + lag1_L28 + lag1_L29 + lag1_L30 + lag1_L31 + lag1_L32 + lag1_L33 + lag1_L34 + lag1_L35 + lag1_L36 + lag1_L37 + lag1_L38 + B1 + B2 + B3 + B4 + B5 + B6 + B7 + B8 + B9 + B10 + B11 + B12 + B13 + B14 + B15 + L1 + L2 + L3 + L4 + L5 + L6 + L7 + L8 + L9 + L10 + L11 + L12 + L13 + L14 + L15 + L16 + L17 + L18 + L19 + L20 + L21 + L22, 
+      # L24 ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + lag1_L15 + lag1_L16 + lag1_L17 + lag1_L18 + lag1_L19 + lag1_L20 + lag1_L21 + lag1_L22 + lag1_L23 + lag1_L24 + lag1_L25 + lag1_L26 + lag1_L27 + lag1_L28 + lag1_L29 + lag1_L30 + lag1_L31 + lag1_L32 + lag1_L33 + lag1_L34 + lag1_L35 + lag1_L36 + lag1_L37 + lag1_L38 + B1 + B2 + B3 + B4 + B5 + B6 + B7 + B8 + B9 + B10 + B11 + B12 + B13 + B14 + B15 + L1 + L2 + L3 + L4 + L5 + L6 + L7 + L8 + L9 + L10 + L11 + L12 + L13 + L14 + L15 + L16 + L17 + L18 + L19 + L20 + L21 + L22 + L23, 
+      # L25 ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + lag1_L15 + lag1_L16 + lag1_L17 + lag1_L18 + lag1_L19 + lag1_L20 + lag1_L21 + lag1_L22 + lag1_L23 + lag1_L24 + lag1_L25 + lag1_L26 + lag1_L27 + lag1_L28 + lag1_L29 + lag1_L30 + lag1_L31 + lag1_L32 + lag1_L33 + lag1_L34 + lag1_L35 + lag1_L36 + lag1_L37 + lag1_L38 + B1 + B2 + B3 + B4 + B5 + B6 + B7 + B8 + B9 + B10 + B11 + B12 + B13 + B14 + B15 + L1 + L2 + L3 + L4 + L5 + L6 + L7 + L8 + L9 + L10 + L11 + L12 + L13 + L14 + L15 + L16 + L17 + L18 + L19 + L20 + L21 + L22 + L23 + L24, 
+      # L26 ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + lag1_L15 + lag1_L16 + lag1_L17 + lag1_L18 + lag1_L19 + lag1_L20 + lag1_L21 + lag1_L22 + lag1_L23 + lag1_L24 + lag1_L25 + lag1_L26 + lag1_L27 + lag1_L28 + lag1_L29 + lag1_L30 + lag1_L31 + lag1_L32 + lag1_L33 + lag1_L34 + lag1_L35 + lag1_L36 + lag1_L37 + lag1_L38 + B1 + B2 + B3 + B4 + B5 + B6 + B7 + B8 + B9 + B10 + B11 + B12 + B13 + B14 + B15 + L1 + L2 + L3 + L4 + L5 + L6 + L7 + L8 + L9 + L10 + L11 + L12 + L13 + L14 + L15 + L16 + L17 + L18 + L19 + L20 + L21 + L22 + L23 + L24 + L25, 
+      # L27 ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + lag1_L15 + lag1_L16 + lag1_L17 + lag1_L18 + lag1_L19 + lag1_L20 + lag1_L21 + lag1_L22 + lag1_L23 + lag1_L24 + lag1_L25 + lag1_L26 + lag1_L27 + lag1_L28 + lag1_L29 + lag1_L30 + lag1_L31 + lag1_L32 + lag1_L33 + lag1_L34 + lag1_L35 + lag1_L36 + lag1_L37 + lag1_L38 + B1 + B2 + B3 + B4 + B5 + B6 + B7 + B8 + B9 + B10 + B11 + B12 + B13 + B14 + B15 + L1 + L2 + L3 + L4 + L5 + L6 + L7 + L8 + L9 + L10 + L11 + L12 + L13 + L14 + L15 + L16 + L17 + L18 + L19 + L20 + L21 + L22 + L23 + L24 + L25 + L26, 
+      # L28 ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + lag1_L15 + lag1_L16 + lag1_L17 + lag1_L18 + lag1_L19 + lag1_L20 + lag1_L21 + lag1_L22 + lag1_L23 + lag1_L24 + lag1_L25 + lag1_L26 + lag1_L27 + lag1_L28 + lag1_L29 + lag1_L30 + lag1_L31 + lag1_L32 + lag1_L33 + lag1_L34 + lag1_L35 + lag1_L36 + lag1_L37 + lag1_L38 + B1 + B2 + B3 + B4 + B5 + B6 + B7 + B8 + B9 + B10 + B11 + B12 + B13 + B14 + B15 + L1 + L2 + L3 + L4 + L5 + L6 + L7 + L8 + L9 + L10 + L11 + L12 + L13 + L14 + L15 + L16 + L17 + L18 + L19 + L20 + L21 + L22 + L23 + L24 + L25 + L26 + L27, 
+      # L29 ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + lag1_L15 + lag1_L16 + lag1_L17 + lag1_L18 + lag1_L19 + lag1_L20 + lag1_L21 + lag1_L22 + lag1_L23 + lag1_L24 + lag1_L25 + lag1_L26 + lag1_L27 + lag1_L28 + lag1_L29 + lag1_L30 + lag1_L31 + lag1_L32 + lag1_L33 + lag1_L34 + lag1_L35 + lag1_L36 + lag1_L37 + lag1_L38 + B1 + B2 + B3 + B4 + B5 + B6 + B7 + B8 + B9 + B10 + B11 + B12 + B13 + B14 + B15 + L1 + L2 + L3 + L4 + L5 + L6 + L7 + L8 + L9 + L10 + L11 + L12 + L13 + L14 + L15 + L16 + L17 + L18 + L19 + L20 + L21 + L22 + L23 + L24 + L25 + L26 + L27 + L28, 
+      # L30 ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + lag1_L15 + lag1_L16 + lag1_L17 + lag1_L18 + lag1_L19 + lag1_L20 + lag1_L21 + lag1_L22 + lag1_L23 + lag1_L24 + lag1_L25 + lag1_L26 + lag1_L27 + lag1_L28 + lag1_L29 + lag1_L30 + lag1_L31 + lag1_L32 + lag1_L33 + lag1_L34 + lag1_L35 + lag1_L36 + lag1_L37 + lag1_L38 + B1 + B2 + B3 + B4 + B5 + B6 + B7 + B8 + B9 + B10 + B11 + B12 + B13 + B14 + B15 + L1 + L2 + L3 + L4 + L5 + L6 + L7 + L8 + L9 + L10 + L11 + L12 + L13 + L14 + L15 + L16 + L17 + L18 + L19 + L20 + L21 + L22 + L23 + L24 + L25 + L26 + L27 + L28 + L29, 
+      # L31 ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + lag1_L15 + lag1_L16 + lag1_L17 + lag1_L18 + lag1_L19 + lag1_L20 + lag1_L21 + lag1_L22 + lag1_L23 + lag1_L24 + lag1_L25 + lag1_L26 + lag1_L27 + lag1_L28 + lag1_L29 + lag1_L30 + lag1_L31 + lag1_L32 + lag1_L33 + lag1_L34 + lag1_L35 + lag1_L36 + lag1_L37 + lag1_L38 + B1 + B2 + B3 + B4 + B5 + B6 + B7 + B8 + B9 + B10 + B11 + B12 + B13 + B14 + B15 + L1 + L2 + L3 + L4 + L5 + L6 + L7 + L8 + L9 + L10 + L11 + L12 + L13 + L14 + L15 + L16 + L17 + L18 + L19 + L20 + L21 + L22 + L23 + L24 + L25 + L26 + L27 + L28 + L29 + L30, 
+      # L32 ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + lag1_L15 + lag1_L16 + lag1_L17 + lag1_L18 + lag1_L19 + lag1_L20 + lag1_L21 + lag1_L22 + lag1_L23 + lag1_L24 + lag1_L25 + lag1_L26 + lag1_L27 + lag1_L28 + lag1_L29 + lag1_L30 + lag1_L31 + lag1_L32 + lag1_L33 + lag1_L34 + lag1_L35 + lag1_L36 + lag1_L37 + lag1_L38 + B1 + B2 + B3 + B4 + B5 + B6 + B7 + B8 + B9 + B10 + B11 + B12 + B13 + B14 + B15 + L1 + L2 + L3 + L4 + L5 + L6 + L7 + L8 + L9 + L10 + L11 + L12 + L13 + L14 + L15 + L16 + L17 + L18 + L19 + L20 + L21 + L22 + L23 + L24 + L25 + L26 + L27 + L28 + L29 + L30 + L31, 
+      # L33 ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + lag1_L15 + lag1_L16 + lag1_L17 + lag1_L18 + lag1_L19 + lag1_L20 + lag1_L21 + lag1_L22 + lag1_L23 + lag1_L24 + lag1_L25 + lag1_L26 + lag1_L27 + lag1_L28 + lag1_L29 + lag1_L30 + lag1_L31 + lag1_L32 + lag1_L33 + lag1_L34 + lag1_L35 + lag1_L36 + lag1_L37 + lag1_L38 + B1 + B2 + B3 + B4 + B5 + B6 + B7 + B8 + B9 + B10 + B11 + B12 + B13 + B14 + B15 + L1 + L2 + L3 + L4 + L5 + L6 + L7 + L8 + L9 + L10 + L11 + L12 + L13 + L14 + L15 + L16 + L17 + L18 + L19 + L20 + L21 + L22 + L23 + L24 + L25 + L26 + L27 + L28 + L29 + L30 + L31 + L32, 
+      # L34 ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + lag1_L15 + lag1_L16 + lag1_L17 + lag1_L18 + lag1_L19 + lag1_L20 + lag1_L21 + lag1_L22 + lag1_L23 + lag1_L24 + lag1_L25 + lag1_L26 + lag1_L27 + lag1_L28 + lag1_L29 + lag1_L30 + lag1_L31 + lag1_L32 + lag1_L33 + lag1_L34 + lag1_L35 + lag1_L36 + lag1_L37 + lag1_L38 + B1 + B2 + B3 + B4 + B5 + B6 + B7 + B8 + B9 + B10 + B11 + B12 + B13 + B14 + B15 + L1 + L2 + L3 + L4 + L5 + L6 + L7 + L8 + L9 + L10 + L11 + L12 + L13 + L14 + L15 + L16 + L17 + L18 + L19 + L20 + L21 + L22 + L23 + L24 + L25 + L26 + L27 + L28 + L29 + L30 + L31 + L32 + L33, 
+      # L35 ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + lag1_L15 + lag1_L16 + lag1_L17 + lag1_L18 + lag1_L19 + lag1_L20 + lag1_L21 + lag1_L22 + lag1_L23 + lag1_L24 + lag1_L25 + lag1_L26 + lag1_L27 + lag1_L28 + lag1_L29 + lag1_L30 + lag1_L31 + lag1_L32 + lag1_L33 + lag1_L34 + lag1_L35 + lag1_L36 + lag1_L37 + lag1_L38 + B1 + B2 + B3 + B4 + B5 + B6 + B7 + B8 + B9 + B10 + B11 + B12 + B13 + B14 + B15 + L1 + L2 + L3 + L4 + L5 + L6 + L7 + L8 + L9 + L10 + L11 + L12 + L13 + L14 + L15 + L16 + L17 + L18 + L19 + L20 + L21 + L22 + L23 + L24 + L25 + L26 + L27 + L28 + L29 + L30 + L31 + L32 + L33 + L34, 
+      # L36 ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + lag1_L15 + lag1_L16 + lag1_L17 + lag1_L18 + lag1_L19 + lag1_L20 + lag1_L21 + lag1_L22 + lag1_L23 + lag1_L24 + lag1_L25 + lag1_L26 + lag1_L27 + lag1_L28 + lag1_L29 + lag1_L30 + lag1_L31 + lag1_L32 + lag1_L33 + lag1_L34 + lag1_L35 + lag1_L36 + lag1_L37 + lag1_L38 + B1 + B2 + B3 + B4 + B5 + B6 + B7 + B8 + B9 + B10 + B11 + B12 + B13 + B14 + B15 + L1 + L2 + L3 + L4 + L5 + L6 + L7 + L8 + L9 + L10 + L11 + L12 + L13 + L14 + L15 + L16 + L17 + L18 + L19 + L20 + L21 + L22 + L23 + L24 + L25 + L26 + L27 + L28 + L29 + L30 + L31 + L32 + L33 + L34 + L35, 
+      # L37 ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + lag1_L15 + lag1_L16 + lag1_L17 + lag1_L18 + lag1_L19 + lag1_L20 + lag1_L21 + lag1_L22 + lag1_L23 + lag1_L24 + lag1_L25 + lag1_L26 + lag1_L27 + lag1_L28 + lag1_L29 + lag1_L30 + lag1_L31 + lag1_L32 + lag1_L33 + lag1_L34 + lag1_L35 + lag1_L36 + lag1_L37 + lag1_L38 + B1 + B2 + B3 + B4 + B5 + B6 + B7 + B8 + B9 + B10 + B11 + B12 + B13 + B14 + B15 + L1 + L2 + L3 + L4 + L5 + L6 + L7 + L8 + L9 + L10 + L11 + L12 + L13 + L14 + L15 + L16 + L17 + L18 + L19 + L20 + L21 + L22 + L23 + L24 + L25 + L26 + L27 + L28 + L29 + L30 + L31 + L32 + L33 + L34 + L35 + L36, 
+      # L38 ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + lag1_L15 + lag1_L16 + lag1_L17 + lag1_L18 + lag1_L19 + lag1_L20 + lag1_L21 + lag1_L22 + lag1_L23 + lag1_L24 + lag1_L25 + lag1_L26 + lag1_L27 + lag1_L28 + lag1_L29 + lag1_L30 + lag1_L31 + lag1_L32 + lag1_L33 + lag1_L34 + lag1_L35 + lag1_L36 + lag1_L37 + lag1_L38 + B1 + B2 + B3 + B4 + B5 + B6 + B7 + B8 + B9 + B10 + B11 + B12 + B13 + B14 + B15 + L1 + L2 + L3 + L4 + L5 + L6 + L7 + L8 + L9 + L10 + L11 + L12 + L13 + L14 + L15 + L16 + L17 + L18 + L19 + L20 + L21 + L22 + L23 + L24 + L25 + L26 + L27 + L28 + L29 + L30 + L31 + L32 + L33 + L34 + L35 + L36 + L37
+    )) # for each cov: cov ~ every time-varying cov lagged + baseline cov + computed cov
+    #covparams <- list(covmodels = c(L1 ~ lag1_A + lag1_L1 + L3 + t0 +
+    #                                  rcspline.eval(lag1_L2, knots = c(-1, 0, 1)),
+    #                                L2 ~ lag1_A + L1 + lag1_L1 + lag1_L2 + L3 + t0,
+    #                                A ~ lag1_A + L1 + L2 + lag1_L1 + lag1_L2 + L3 + t0))
+    ymodel <- OxCGRT_ConfirmedCases ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + B1 + B2 + B3 + B4 + B5 + B6 + L1 + L2 + L3 + L4 + L5 + L6 + L7 + L8 + L9 + L10 + L11 + L12 + L13 + L14
+    # ymodel <- OxCGRT_ConfirmedCases ~ lag1_L1 + lag1_L2 + lag1_L3 + lag1_L4 + lag1_L5 + lag1_L6 + lag1_L7 + lag1_L8 + lag1_L9 + lag1_L10 + lag1_L11 + lag1_L12 + lag1_L13 + lag1_L14 + lag1_L15 + lag1_L16 + lag1_L17 + lag1_L18 + lag1_L19 + lag1_L20 + lag1_L21 + lag1_L22 + lag1_L23 + lag1_L24 + lag1_L25 + lag1_L26 + lag1_L27 + lag1_L28 + lag1_L29 + lag1_L30 + lag1_L31 + lag1_L32 + lag1_L33 + lag1_L34 + lag1_L35 + lag1_L36 + lag1_L37 + lag1_L38 + B1 + B2 + B3 + B4 + B5 + B6 + B7 + B8 + B9 + B10 + B11 + B12 + B13 + B14 + B15 + L1 + L2 + L3 + L4 + L5 + L6 + L7 + L8 + L9 + L10 + L11 + L12 + L13 + L14 + L15 + L16 + L17 + L18 + L19 + L20 + L21 + L22 + L23 + L24 + L25 + L26 + L27 + L28 + L29 + L30 + L31 + L32 + L33 + L34 + L35 + L36 + L37 + L38
+    #ymodel <- Y ~ A + L1 + L2 + lag1_A + lag1_L1 + lag1_L2 + L3
+    intvars <- as.list(treatments) #list('A', 'A')
+    interventions <- Map(function(x) rep(0,1096), 1:length(treatments)) # all 0 treatment
+    #interventions <- list(list(c(static, rep(0, 7))),
+    #                      list(c(static, rep(1, 7))))
+    int_descript <- paste0('NeverTreat', 1:length(treatments)) #c('Never treat', 'Always treat')
+    nsimul <- 10000
+```
+
+```{r}
+# Rename columns
+#rename(df, col_one = col1)
+#do.call(fun, as.list(param))
+rename_sub_df = function(column_params) { do.call(rename, c(list(subnational_df), column_params)) }
+params <- as.list(c(covnames_og, baseline_confounders))
+subnational_df <- rename_sub_df(params)
+# Replace time values with 0 1 2 3...
+time_values <- do.call(c, Map(function(x) 0:1095, 1:50))
+subnational_df$OxCGRT_Date <- time_values
+# Replace nan values (temporary fix)
+subnational_df[is.na(subnational_df)] <- 0
+head(subnational_df)
+```
+
+
+```{r}
+ gform_basic <- gformula(obs_data = subnational_df, id = id,
+                          time_points = time_points,
+                          time_name = time_name, covnames = covnames_L,
+                          outcome_name = outcome_name,
+                          outcome_type = 'continuous_eof', covtypes = covtypes,
+                          covparams = covparams, ymodel = ymodel,
+                          intvars = intvars,
+                          interventions = interventions,
+                          int_descript = int_descript,
+                          histories = histories, histvars = histvars,
+                          basecovs = baseline_confounders_B, nsimul = nsimul,
+                          seed = 1234)
+# Error in nnet.default(X, Y, w, mask = mask, size = 0, skip = TRUE, softmax = TRUE,  : 
+# too many (4526) weights -> 38 covariates + 15 baseline variables 
+# Error : object 'rename_sub_df' not found
+```
+
+
+```{r}
+plot(gform_basic)
+```
+
